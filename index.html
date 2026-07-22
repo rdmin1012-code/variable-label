@@ -139,7 +139,7 @@
 
                     let type = (casetype === 'SA' || (!casetype && /SA/i.test(rawVar))) ? 'SA' : 'MULTI';
                     
-                    // 🔥 순위형(RK) 문항인지 체크
+                    // 🔥 RK(순위형) 여부 판별
                     let isRK = (casetype === 'RK' || /RK/i.test(rawVar));
 
                     if (!blockVarsMap.has(newBase)) {
@@ -151,7 +151,7 @@
                         input: inputEl,
                         cell: span.closest('td, th'),
                         row: span.closest('tr'),
-                        isRK: isRK // RK 여부 저장
+                        isRK: isRK // RK 여부 객체에 저장
                     });
                 });
 
@@ -199,7 +199,7 @@
                             let subLabel = getSubLabel(item, false, [], tableHeaders);
                             let finalLabel = mainLabel;
                             
-                            // 🔥 RK 문항일 경우 '순위' 텍스트 추가
+                            // 🔥 RK 문항일 경우 순번 뒤에 '순위' 텍스트 추가
                             let rankText = item.isRK ? "순위" : "";
                             
                             if (subLabel) {
