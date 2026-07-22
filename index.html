@@ -2,12 +2,12 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>SPSS Variable Label 생성기 (최종 완성본)</title>
+    <title>SPSS 라벨 자동 생성기</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; padding: 20px; color: #333; }
         .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-        h1 { text-align: center; color: #2c3e50; margin-bottom: 5px; }
-        .description { text-align: center; color: #666; margin-bottom: 30px; line-height: 1.5; }
+        /* 설명이 빠졌으므로 제목 아래 여백을 25px로 늘려주어 밸런스를 맞췄습니다 */
+        h1 { text-align: center; color: #2c3e50; margin-bottom: 25px; } 
         
         .upload-box { border: 2px dashed #3498db; padding: 30px; text-align: center; border-radius: 8px; background: #ebf5fb; margin-bottom: 25px; transition: 0.3s; }
         .upload-box:hover { background: #d6eaf8; }
@@ -26,8 +26,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>SPSS Variable Label 자동 생성기</h1>
-        <p class="description">ISAS HTML 파일을 업로드하면 변수명 꼬리표(MA, SA 등)를 떼어내고,<br>표 문항(C3, T1 등)의 서브 라벨에 <strong>_1), _2)</strong> 형태의 순번을 자동 부여합니다. (E문항 제외)</p>
+        <h1>SPSS 라벨 자동 생성기</h1>
         
         <div class="upload-box">
             <label class="file-label" for="htmlFile">📂 HTML 파일 업로드</label>
