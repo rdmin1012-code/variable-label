@@ -138,6 +138,9 @@
                     let valPart = valMatch ? (valMatch[1] || valMatch[2]) : "";
 
                     let type = (casetype === 'SA' || (!casetype && /SA/i.test(rawVar))) ? 'SA' : 'MULTI';
+                    
+                    // 🔥 순위형(RK) 문항인지 체크
+                    let isRK = (casetype === 'RK' || /RK/i.test(rawVar));
 
                     if (!blockVarsMap.has(newBase)) {
                         blockVarsMap.set(newBase, { type: type, inputs: [] });
@@ -147,7 +150,8 @@
                         span: span,
                         input: inputEl,
                         cell: span.closest('td, th'),
-                        row: span.closest('tr')
+                        row: span.closest('tr'),
+                        isRK: isRK // RK 여부 저장
                     });
                 });
 
@@ -195,10 +199,13 @@
                             let subLabel = getSubLabel(item, false, [], tableHeaders);
                             let finalLabel = mainLabel;
                             
+                            // 🔥 RK 문항일 경우 '순위' 텍스트 추가
+                            let rankText = item.isRK ? "순위" : "";
+                            
                             if (subLabel) {
-                                finalLabel = item.val ? `${mainLabel}_${item.val}) ${subLabel}` : `${mainLabel}_${subLabel}`;
+                                finalLabel = item.val ? `${mainLabel}_${item.val}${rankText}) ${subLabel}` : `${mainLabel}_${subLabel}`;
                             } else if (item.val) {
-                                finalLabel = `${mainLabel}_${item.val})`;
+                                finalLabel = `${mainLabel}_${item.val}${rankText})`;
                             }
                             
                             syntaxLabels.push(`  ${finalVarName} "${finalLabel}"`);
