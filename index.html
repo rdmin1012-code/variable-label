@@ -5,21 +5,23 @@
     <title>SPSS 라벨 자동 생성기</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; padding: 20px; color: #333; }
-        .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
-        /* 설명이 빠졌으므로 제목 아래 여백을 25px로 늘려주어 밸런스를 맞췄습니다 */
-        h1 { text-align: center; color: #2c3e50; margin-bottom: 25px; } 
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 40px 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        h1 { text-align: center; color: #2c3e50; margin-bottom: 30px; }
         
-        .upload-box { border: 2px dashed #3498db; padding: 30px; text-align: center; border-radius: 8px; background: #ebf5fb; margin-bottom: 25px; transition: 0.3s; }
+        .upload-box { border: 2px dashed #3498db; padding: 40px; text-align: center; border-radius: 8px; background: #ebf5fb; margin-bottom: 25px; transition: 0.3s; }
         .upload-box:hover { background: #d6eaf8; }
         input[type="file"] { display: none; }
-        .file-label { display: inline-block; padding: 12px 24px; background: #3498db; color: white; font-weight: bold; border-radius: 4px; cursor: pointer; transition: background 0.2s; }
+        .file-label { display: inline-block; padding: 12px 24px; background: #3498db; color: white; font-weight: bold; border-radius: 4px; cursor: pointer; transition: background 0.2s; font-size: 16px; }
         .file-label:hover { background: #2980b9; }
         #fileName { margin-top: 15px; font-weight: bold; color: #2c3e50; }
 
+        .option-group { text-align: center; margin-bottom: 20px; }
+        .option-group label { cursor: pointer; font-weight: bold; color: #34495e; font-size: 15px; user-select: none; }
+        .option-group input[type="checkbox"] { transform: scale(1.2); margin-right: 8px; cursor: pointer; }
+
         .btn-group { text-align: center; margin-bottom: 25px; }
-        button { padding: 10px 25px; margin: 0 5px; border: none; border-radius: 4px; font-size: 15px; font-weight: bold; cursor: pointer; color: white; transition: background 0.2s; }
-        .btn-copy { background: #2ecc71; }
-        .btn-copy:hover { background: #27ae60; }
+        button { padding: 10px 25px; border: none; border-radius: 4px; font-size: 15px; font-weight: bold; cursor: pointer; color: white; transition: background 0.2s; background: #2ecc71; }
+        button:hover { background: #27ae60; }
         
         #output { width: 100%; height: 400px; padding: 12px; border: 1px solid #ccd1d9; border-radius: 4px; resize: vertical; font-family: monospace; font-size: 14px; box-sizing: border-box; background: #f8f9fa; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
     </style>
@@ -34,8 +36,14 @@
             <div id="fileName">선택된 파일이 없습니다.</div>
         </div>
         
+        <div class="option-group">
+            <label>
+                <input type="checkbox" id="addRename" checked> RENAME 구문 추가 (예: Q1 ➔ SQ1)
+            </label>
+        </div>
+
         <div class="btn-group">
-            <button class="btn-copy" onclick="copyOutput()">결과 복사하기</button>
+            <button onclick="copyOutput()">생성된 결과 복사하기</button>
         </div>
         
         <label for="output" style="font-weight: bold; color: #34495e;">생성된 SPSS Syntax:</label>
@@ -61,7 +69,10 @@
             const parser = new DOMParser();
             const doc = parser.parseFromString(htmlString, 'text/html');
             
+            const isRenameEnabled = document.getElementById('addRename').checked;
+            
             let syntaxLabels = [];
+            let renamePairs = []; // Rename 맵핑 보관 배열
             let seenVars = new Set(); // 중복 생성 방지용
 
             const questions = doc.querySelectorAll('.ISAS5');
@@ -79,6 +90,11 @@
                 let clone = treeLink.cloneNode(true);
                 clone.querySelectorAll('span').forEach(span => span.remove());
                 let mainLabel = clone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
+
+                // 문항 텍스트에서 접두사(질문 번호) 추출 (예: "SQ1.", "D3-1.")
+                let prefixMatch = mainLabel.match(/^([A-Za-z]+[0-9]+(?:-[0-9]+)?)\./);
+                // SPSS 변수명에는 하이픈(-)을 쓸 수 없으므로 언더바(_)로 치환
+                let targetPrefix = prefixMatch ? prefixMatch[1].replace(/-/g, '_') : null;
 
                 // 2. 이 문항에 속한 모든 변수 찾기
                 const varSpans = qBlock.querySelectorAll('.variableinformation2');
@@ -119,6 +135,7 @@
                 });
 
                 let saVariables = Array.from(blockVarsMap.values()).filter(v => v.type === 'SA');
+                // 같은 질문 덩어리 안에 SA 변수가 여러 개면 그리드(표) 문항으로 간주
                 let isGridSA = saVariables.length > 1;
 
                 // 3. 테이블 행(Row), 열(Col) 제목 파악
@@ -163,7 +180,6 @@
                             let subLabel = getSubLabel(item, false, [], tableHeaders);
                             let finalLabel = mainLabel;
                             
-                            // MA도 통일성을 위해 _1) 텍스트 형태로 결합
                             if (subLabel) {
                                 finalLabel = item.val ? `${mainLabel}_${item.val}) ${subLabel}` : `${mainLabel}_${subLabel}`;
                             } else if (item.val) {
@@ -171,6 +187,15 @@
                             }
                             
                             syntaxLabels.push(`  ${finalVarName} "${finalLabel}"`);
+                            
+                            // Rename 구문 생성 로직
+                            if (isRenameEnabled && targetPrefix) {
+                                let targetVarName = item.val ? `${targetPrefix}_${item.val}` : targetPrefix;
+                                if (finalVarName !== targetVarName) {
+                                    renamePairs.push(`  (${finalVarName} = ${targetVarName})`);
+                                }
+                            }
+
                             seenVars.add(finalVarName);
                         });
                     } 
@@ -189,10 +214,19 @@
                             } else {
                                 finalLabel = `${mainLabel}_${gridCounter})`;
                             }
-                            gridCounter++; // 다음 변수를 위해 카운터 증가
                         }
                         
                         syntaxLabels.push(`  ${finalVarName} "${finalLabel}"`);
+
+                        // Rename 구문 생성 로직
+                        if (isRenameEnabled && targetPrefix) {
+                            let targetVarName = isGridSA ? `${targetPrefix}_${gridCounter}` : targetPrefix;
+                            if (finalVarName !== targetVarName) {
+                                renamePairs.push(`  (${finalVarName} = ${targetVarName})`);
+                            }
+                        }
+
+                        if (isGridSA) gridCounter++; 
                         seenVars.add(finalVarName);
                     }
                 });
@@ -204,7 +238,16 @@
                 return;
             }
 
+            // 1. 라벨 구문 완성
             let finalSyntax = 'VARIABLE LABELS\n' + syntaxLabels.join('\n') + '.\nEXECUTE.';
+
+            // 2. Rename 옵션 켜져있으면 하단에 리네임 구문 추가
+            if (isRenameEnabled && renamePairs.length > 0) {
+                finalSyntax += '\n\nRENAME VARIABLES\n';
+                finalSyntax += renamePairs.join('\n');
+                finalSyntax += '.\nEXECUTE.';
+            }
+
             document.getElementById('output').value = finalSyntax;
         }
 
@@ -252,7 +295,7 @@
             }
             outputArea.select();
             document.execCommand('copy');
-            alert('클립보드에 복사되었습니다!\nSPSS Syntax Editor 창에 붙여넣기 하세요.');
+            alert('클립보드에 복사되었습니다!\nSPSS Syntax 창에 붙여넣기 하세요.');
             window.getSelection().removeAllRanges();
         }
     </script>
