@@ -2,10 +2,10 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>SPSS Variable Label 자동 생성</title>
+    <title>SPSS Variable Label 생성기 (그리드 완벽 지원)</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; padding: 20px; color: #333; }
-        .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
+        .container { max-width: 900px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         h1 { text-align: center; color: #2c3e50; margin-bottom: 5px; }
         .description { text-align: center; color: #666; margin-bottom: 30px; line-height: 1.5; }
         
@@ -21,13 +21,13 @@
         .btn-copy { background: #2ecc71; }
         .btn-copy:hover { background: #27ae60; }
         
-        #output { width: 100%; height: 350px; padding: 12px; border: 1px solid #ccd1d9; border-radius: 4px; resize: vertical; font-family: monospace; font-size: 14px; box-sizing: border-box; background: #f8f9fa; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
+        #output { width: 100%; height: 400px; padding: 12px; border: 1px solid #ccd1d9; border-radius: 4px; resize: vertical; font-family: monospace; font-size: 14px; box-sizing: border-box; background: #f8f9fa; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>SPSS Variable Label 자동 생성</h1>
-        <p class="description">ISAS에서 다운로드한 HTML 파일을 업로드하면,<br>자동으로 MA/SA 등은 떼어내고 질문 라벨만 추출하여 신택스를 만듭니다.</p>
+        <h1>SPSS Variable Label 생성기</h1>
+        <p class="description">ISAS HTML 파일을 업로드하면 변수명 꼬리표(MA, SA 등)를 깔끔하게 떼어내고,<br>그리드(표) 문항의 세부 보기(행/열 제목)까지 꼼꼼하게 찾아 라벨에 붙여줍니다.</p>
         
         <div class="upload-box">
             <label class="file-label" for="htmlFile">📂 HTML 파일 업로드</label>
@@ -52,11 +52,9 @@
             
             const reader = new FileReader();
             reader.onload = function(e) {
-                // 한글 깨짐 방지를 위해 인코딩 처리된 텍스트를 읽어옵니다.
-                const htmlContent = e.target.result;
-                extractDataFromHTML(htmlContent);
+                extractDataFromHTML(e.target.result);
             };
-            // EUC-KR로 읽어들여 한글 깨짐 방지 (ISAS 파일 특성 반영)
+            // ISAS 파일의 한글 깨짐 방지를 위해 euc-kr 지정
             reader.readAsText(file, 'euc-kr');
         }
 
@@ -65,50 +63,180 @@
             const doc = parser.parseFromString(htmlString, 'text/html');
             
             let syntaxLabels = [];
+            let seenVars = new Set(); // 중복 생성 방지용
+
+            const questions = doc.querySelectorAll('.ISAS5');
             
-            // 왼쪽 트리뷰 영역의 모든 a 태그(문항 정보)를 찾습니다.
-            const links = doc.querySelectorAll('#syncTreeview a'); 
-            
-            links.forEach(link => {
-                // 재정렬된 문항 번호(빨간색 텍스트)를 감싸는 span 태그 찾기
-                const newQSpan = link.querySelector('.questionNumberInformation2');
-                
-                if (newQSpan && newQSpan.innerText.trim() !== '') {
-                    // 1. 변수명 추출: "[Q1]" -> "Q1" 형태로 괄호 제거
-                    let varName = newQSpan.innerText.replace(/\[|\]/g, '').trim();
+            questions.forEach(qBlock => {
+                const qId = qBlock.id;
+                const treeLink = doc.querySelector(`#syncTreeview a[href*="#${qId}"]`);
+                if (!treeLink) return;
+
+                // 1. 큰 질문(Main Label) 추출
+                let clone = treeLink.cloneNode(true);
+                // 문항 번호([Q1] 등)를 감싸는 span들을 지워서 순수 질문만 남김
+                clone.querySelectorAll('span').forEach(span => span.remove());
+                let mainLabel = clone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
+
+                // 2. 이 문항에 속한 모든 재정렬된 변수(빨간 글씨) 찾기
+                const varSpans = qBlock.querySelectorAll('.variableinformation2');
+                if (varSpans.length === 0) return;
+
+                let blockVarsMap = new Map();
+
+                varSpans.forEach(span => {
+                    // 예: "[Q26SA:1]" -> "Q26SA:1"
+                    let rawVar = span.innerText.replace(/\[|\]/g, '').trim(); 
                     
-                    // 만약 변수명에 MA, SA, TN, TL, TS, RK 등이 붙어있다면 삭제 (질문번호만 남김)
-                    varName = varName.replace(/(MA|SA|TN|TL|TS|RK).*$/i, '');
-                    
-                    // 2. 라벨(질문) 추출: a 태그 내부의 문항번호 span들을 제거하고 순수 텍스트만 가져오기
-                    let clone = link.cloneNode(true);
-                    clone.querySelectorAll('span').forEach(span => span.remove());
-                    
-                    let varLabel = clone.innerText.trim();
-                    
-                    // 여러 줄바꿈이나 탭을 띄어쓰기 하나로 압축하고, 내부 큰따옴표 충돌 방지
-                    varLabel = varLabel.replace(/\s+/g, ' ').replace(/"/g, '""');
-                    
-                    // 배열에 저장
-                    if (varName && varLabel) {
-                        syntaxLabels.push(`  ${varName} "${varLabel}"`);
+                    // 연결된 input 태그 찾기 (타입 판별용)
+                    let inputEl = span.closest('label')?.querySelector('input') || span.previousElementSibling;
+                    if(!inputEl || inputEl.tagName !== 'INPUT') {
+                        inputEl = span.parentElement.querySelector('input');
                     }
-                }
+                    let casetype = inputEl ? inputEl.getAttribute('casetype') : '';
+
+                    // 변수명 정제: 앞의 'Q번호'만 추출 (예: Q26)
+                    let qMatch = rawVar.match(/^(Q\d+)/i);
+                    let newBase = qMatch ? qMatch[1].toUpperCase() : rawVar.replace(/(MA|SA|TN|TL|TS|RK).*$/i, '');
+
+                    // 뒤에 붙은 값(옵션 번호) 추출 (예: :1 또는 _1 -> 1)
+                    let valMatch = rawVar.match(/[:_](\d+)$|(\d+)$/);
+                    let valPart = valMatch ? (valMatch[1] || valMatch[2]) : "";
+
+                    // SA(단일) 문항인지 MULTI(다중/텍스트) 문항인지 구분
+                    let type = (casetype === 'SA' || (!casetype && /SA/i.test(rawVar))) ? 'SA' : 'MULTI';
+
+                    if (!blockVarsMap.has(newBase)) {
+                        blockVarsMap.set(newBase, { type: type, inputs: [] });
+                    }
+                    blockVarsMap.get(newBase).inputs.push({
+                        val: valPart,
+                        span: span,
+                        input: inputEl,
+                        cell: span.closest('td, th'),
+                        row: span.closest('tr')
+                    });
+                });
+
+                // 3. 단일(SA) 문항이 여러 개면 표(Grid) 문항이라고 판단
+                let saVariables = Array.from(blockVarsMap.values()).filter(v => v.type === 'SA');
+                let isGridSA = saVariables.length > 1;
+
+                // 4. 테이블의 행(Row), 열(Col) 제목을 미리 파악해두기
+                let tables = qBlock.querySelectorAll('table[tabletype="CASE"]');
+                let tableHeaders = new Map();
+
+                tables.forEach(table => {
+                    let rows = table.querySelectorAll('tr');
+                    let colHeaders = [];
+                    if (rows.length > 0) {
+                        let firstRowCells = rows[0].querySelectorAll('td, th');
+                        firstRowCells.forEach(cell => {
+                            let cClone = cell.cloneNode(true);
+                            // 불필요한 태그 제거 (보기에 들어간 span 등)
+                            cClone.querySelectorAll('label, input, span.variableinformation, span.variableinformation2').forEach(e => e.remove());
+                            colHeaders.push(cClone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""'));
+                        });
+                    }
+                    let rowHeaders = [];
+                    rows.forEach(row => {
+                        let cells = row.querySelectorAll('td, th');
+                        let rHead = "";
+                        if (cells.length > 0) {
+                            let cClone = cells[0].cloneNode(true);
+                            cClone.querySelectorAll('label, input, span.variableinformation, span.variableinformation2').forEach(e => e.remove());
+                            rHead = cClone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
+                        }
+                        rowHeaders.push(rHead);
+                    });
+                    tableHeaders.set(table, { cols: colHeaders, rows: rowHeaders });
+                });
+
+                // 5. 최종 Syntax 라벨 문자열 만들기
+                blockVarsMap.forEach((varData, newBase) => {
+                    
+                    // (A) 다중선택/텍스트(MULTI) 문항의 경우: 변수명에 _1, _2 등을 붙여 각각 생성
+                    if (varData.type === 'MULTI') {
+                        varData.inputs.forEach(item => {
+                            let finalVarName = item.val ? `${newBase}_${item.val}` : newBase;
+                            if (seenVars.has(finalVarName)) return;
+
+                            let subLabel = getSubLabel(item, false, [], tableHeaders);
+                            let finalLabel = subLabel ? `${mainLabel}_${subLabel}` : mainLabel;
+                            
+                            syntaxLabels.push(`  ${finalVarName} "${finalLabel}"`);
+                            seenVars.add(finalVarName);
+                        });
+                    } 
+                    // (B) 단일선택(SA) 문항의 경우: 변수명은 하나(Q26 등)만 생성
+                    else {
+                        let finalVarName = newBase;
+                        if (seenVars.has(finalVarName)) return;
+
+                        let finalLabel = mainLabel;
+                        // 표(Grid) 형식의 SA 문항이라면 행/열 제목을 찾아 덧붙임
+                        if (isGridSA) {
+                            let subLabel = getSubLabel(varData.inputs[0], true, varData.inputs, tableHeaders);
+                            if (subLabel) {
+                                finalLabel = `${mainLabel}_${subLabel}`;
+                            }
+                        }
+                        
+                        syntaxLabels.push(`  ${finalVarName} "${finalLabel}"`);
+                        seenVars.add(finalVarName);
+                    }
+                });
             });
 
-            // 결과 출력 처리
             if (syntaxLabels.length === 0) {
-                alert("파일에서 문항 정보를 찾지 못했습니다.\n재정렬된 문항 번호가 있는 올바른 ISAS HTML 파일인지 확인해주세요.");
+                alert("파일에서 문항 정보를 추출하지 못했습니다.\n재정렬된 데이터가 포함된 파일인지 확인해주세요.");
                 document.getElementById('output').value = "";
                 return;
             }
 
-            // 배열을 하나의 문자열로 결합하고 마침표(.) 추가
-            let finalSyntax = 'VARIABLE LABELS\n';
-            finalSyntax += syntaxLabels.join('\n');
-            finalSyntax += '.\nEXECUTE.';
-            
+            let finalSyntax = 'VARIABLE LABELS\n' + syntaxLabels.join('\n') + '.\nEXECUTE.';
             document.getElementById('output').value = finalSyntax;
+        }
+
+        // 보조 라벨(표의 행/열 제목 등)을 지능적으로 찾아주는 함수
+        function getSubLabel(item, isGridSA, allInputsForVar, tableHeaders) {
+            let cell = item.cell;
+            if (!cell) return "";
+
+            // 1. 라벨 텍스트가 인접해 있다면 최우선으로 사용 (일반적인 객관식 문항)
+            let labelEl = cell.querySelector('label');
+            if (labelEl) {
+                let lClone = labelEl.cloneNode(true);
+                // 텍스트 보존을 위해 변수정보 span과 input만 쏙 빼고 글자만 추출
+                lClone.querySelectorAll('input, span.variableinformation, span.variableinformation2').forEach(e => e.remove());
+                let text = lClone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
+                if (text) return text;
+            }
+
+            // 2. 만약 글자가 없다면 (표 형태 문항) -> 테이블의 행(Row)/열(Col) 제목을 참조
+            let table = cell.closest('table');
+            let headers = tableHeaders.get(table);
+            if (!headers) return "";
+
+            let row = item.row;
+            let rIdx = Array.from(table.querySelectorAll('tr')).indexOf(row);
+            let cellsArray = Array.from(row.querySelectorAll('td, th'));
+            let cIdx = cellsArray.indexOf(cell);
+
+            let rHead = headers.rows[rIdx] || "";
+            let cHead = headers.cols[cIdx] || "";
+
+            // 동일한 변수(예: Q46)가 가로로 퍼져있는지 세로로 퍼져있는지 판단하여 행/열 제목 결정
+            if (isGridSA && allInputsForVar.length > 1) {
+                let rowsSet = new Set(allInputsForVar.map(i => i.row));
+                let colsSet = new Set(allInputsForVar.map(i => Array.from(i.row.querySelectorAll('td, th')).indexOf(i.cell)));
+
+                if (rowsSet.size > 1 && colsSet.size === 1) return cHead || rHead; // 세로형
+                if (colsSet.size > 1 && rowsSet.size === 1) return rHead || cHead; // 가로형
+            }
+
+            // 구분이 모호하거나 다중선택 표(MA)인 경우 둘 다 조합
+            return [rHead, cHead].filter(Boolean).join(" - ");
         }
 
         function copyOutput() {
@@ -119,7 +247,7 @@
             }
             outputArea.select();
             document.execCommand('copy');
-            alert('클립보드에 복사되었습니다!\nSPSS 신택스 창에 바로 붙여넣기 하세요.');
+            alert('클립보드에 복사되었습니다!\nSPSS Syntax Editor 창에 붙여넣기 하세요.');
             window.getSelection().removeAllRanges();
         }
     </script>
