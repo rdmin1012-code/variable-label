@@ -2,12 +2,12 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>SPSS Variable Label 자동 생성기 (파일 업로드형)</title>
+    <title>SPSS Variable Label 자동 생성기</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; padding: 20px; color: #333; }
         .container { max-width: 800px; margin: 0 auto; background: white; padding: 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
         h1 { text-align: center; color: #2c3e50; margin-bottom: 5px; }
-        .description { text-align: center; color: #666; margin-bottom: 30px; }
+        .description { text-align: center; color: #666; margin-bottom: 30px; line-height: 1.5; }
         
         .upload-box { border: 2px dashed #3498db; padding: 30px; text-align: center; border-radius: 8px; background: #ebf5fb; margin-bottom: 25px; transition: 0.3s; }
         .upload-box:hover { background: #d6eaf8; }
@@ -17,20 +17,20 @@
         #fileName { margin-top: 15px; font-weight: bold; color: #2c3e50; }
 
         .btn-group { text-align: center; margin-bottom: 25px; }
-        button { padding: 10px 25px; margin: 0 5px; border: none; border-radius: 4px; font-size: 15px; font-weight: bold; cursor: pointer; color: white; }
+        button { padding: 10px 25px; margin: 0 5px; border: none; border-radius: 4px; font-size: 15px; font-weight: bold; cursor: pointer; color: white; transition: background 0.2s; }
         .btn-copy { background: #2ecc71; }
         .btn-copy:hover { background: #27ae60; }
         
-        #output { width: 100%; height: 300px; padding: 12px; border: 1px solid #ccd1d9; border-radius: 4px; resize: vertical; font-family: monospace; box-sizing: border-box; background: #f8f9fa; }
+        #output { width: 100%; height: 350px; padding: 12px; border: 1px solid #ccd1d9; border-radius: 4px; resize: vertical; font-family: monospace; font-size: 14px; box-sizing: border-box; background: #f8f9fa; white-space: pre; overflow-wrap: normal; overflow-x: scroll; }
     </style>
 </head>
 <body>
     <div class="container">
         <h1>SPSS Variable Label 자동 생성기</h1>
-        <p class="description">HTML 파일을 업로드하면 자동으로 변수명과 설명을 추출하여 신택스를 만듭니다.</p>
+        <p class="description">ISAS에서 다운로드한 HTML 파일을 업로드하면,<br>자동으로 MA/SA 등은 떼어내고 질문 라벨만 추출하여 신택스를 만듭니다.</p>
         
         <div class="upload-box">
-            <label class="file-label" for="htmlFile">HTML 파일 선택하기</label>
+            <label class="file-label" for="htmlFile">📂 HTML 파일 업로드</label>
             <input type="file" id="htmlFile" accept=".html, .htm" onchange="handleFileUpload(event)">
             <div id="fileName">선택된 파일이 없습니다.</div>
         </div>
@@ -40,7 +40,7 @@
         </div>
         
         <label for="output" style="font-weight: bold; color: #34495e;">생성된 SPSS Syntax:</label>
-        <textarea id="output" readonly placeholder="HTML 파일을 업로드하면 이곳에 Syntax가 자동 생성됩니다."></textarea>
+        <textarea id="output" readonly placeholder="파일을 업로드하면 이곳에 Syntax가 자동 생성됩니다."></textarea>
     </div>
 
     <script>
@@ -52,50 +52,63 @@
             
             const reader = new FileReader();
             reader.onload = function(e) {
+                // 한글 깨짐 방지를 위해 인코딩 처리된 텍스트를 읽어옵니다.
                 const htmlContent = e.target.result;
                 extractDataFromHTML(htmlContent);
             };
-            reader.readAsText(file);
+            // EUC-KR로 읽어들여 한글 깨짐 방지 (ISAS 파일 특성 반영)
+            reader.readAsText(file, 'euc-kr');
         }
 
         function extractDataFromHTML(htmlString) {
-            // 1. 업로드된 텍스트를 실제 HTML 구조로 변환
             const parser = new DOMParser();
             const doc = parser.parseFromString(htmlString, 'text/html');
             
-            let syntax = 'VARIABLE LABELS\n';
-            let dataFound = false;
-
-            /* =========================================================
-               [중요] 여기서부터 HTML 구조에 맞게 데이터를 뽑아내는 로직이 들어갑니다.
-               지금은 임시로 'td' 태그를 찾는 예시 코드를 넣어두었습니다.
-               ========================================================= */
+            let syntaxLabels = [];
             
-            // 예시: 파일 안의 모든 테이블(table)의 행(tr)을 찾아서 읽음
-            const rows = doc.querySelectorAll('tr'); 
+            // 왼쪽 트리뷰 영역의 모든 a 태그(문항 정보)를 찾습니다.
+            const links = doc.querySelectorAll('#syncTreeview a'); 
             
-            rows.forEach(row => {
-                const cells = row.querySelectorAll('td');
-                // 만약 첫 번째 칸이 변수명, 두 번째 칸이 레이블이라면? (가정)
-                if (cells.length >= 2) {
-                    const varName = cells[0].innerText.trim();
-                    let varLabel = cells[1].innerText.trim().replace(/"/g, '""');
+            links.forEach(link => {
+                // 재정렬된 문항 번호(빨간색 텍스트)를 감싸는 span 태그 찾기
+                const newQSpan = link.querySelector('.questionNumberInformation2');
+                
+                if (newQSpan && newQSpan.innerText.trim() !== '') {
+                    // 1. 변수명 추출: "[Q1]" -> "Q1" 형태로 괄호 제거
+                    let varName = newQSpan.innerText.replace(/\[|\]/g, '').trim();
                     
+                    // 만약 변수명에 MA, SA, TN, TL, TS, RK 등이 붙어있다면 삭제 (질문번호만 남김)
+                    varName = varName.replace(/(MA|SA|TN|TL|TS|RK).*$/i, '');
+                    
+                    // 2. 라벨(질문) 추출: a 태그 내부의 문항번호 span들을 제거하고 순수 텍스트만 가져오기
+                    let clone = link.cloneNode(true);
+                    clone.querySelectorAll('span').forEach(span => span.remove());
+                    
+                    let varLabel = clone.innerText.trim();
+                    
+                    // 여러 줄바꿈이나 탭을 띄어쓰기 하나로 압축하고, 내부 큰따옴표 충돌 방지
+                    varLabel = varLabel.replace(/\s+/g, ' ').replace(/"/g, '""');
+                    
+                    // 배열에 저장
                     if (varName && varLabel) {
-                        syntax += `  ${varName} "${varLabel}"\n`;
-                        dataFound = true;
+                        syntaxLabels.push(`  ${varName} "${varLabel}"`);
                     }
                 }
             });
 
-            if (!dataFound) {
-                alert("파일에서 변수명과 레이블을 찾지 못했습니다. HTML 구조 확인이 필요합니다!");
+            // 결과 출력 처리
+            if (syntaxLabels.length === 0) {
+                alert("파일에서 문항 정보를 찾지 못했습니다.\n재정렬된 문항 번호가 있는 올바른 ISAS HTML 파일인지 확인해주세요.");
                 document.getElementById('output').value = "";
                 return;
             }
 
-            syntax += 'EXECUTE.';
-            document.getElementById('output').value = syntax;
+            // 배열을 하나의 문자열로 결합하고 마침표(.) 추가
+            let finalSyntax = 'VARIABLE LABELS\n';
+            finalSyntax += syntaxLabels.join('\n');
+            finalSyntax += '.\nEXECUTE.';
+            
+            document.getElementById('output').value = finalSyntax;
         }
 
         function copyOutput() {
@@ -106,7 +119,7 @@
             }
             outputArea.select();
             document.execCommand('copy');
-            alert('클립보드에 복사되었습니다!');
+            alert('클립보드에 복사되었습니다!\nSPSS 신택스 창에 바로 붙여넣기 하세요.');
             window.getSelection().removeAllRanges();
         }
     </script>
