@@ -86,6 +86,29 @@
             reader.readAsText(file, 'euc-kr');
         }
 
+        // span과 연결된 정확한 Input 요소를 정밀 탐색하는 함수
+        function findInputForSpan(span) {
+            let curr = span.previousElementSibling;
+            while (curr) {
+                if (['INPUT', 'TEXTAREA'].includes(curr.tagName)) return curr;
+                curr = curr.previousElementSibling;
+            }
+            let parent = span.parentElement;
+            if (parent) {
+                let inputs = Array.from(parent.querySelectorAll('input, textarea'));
+                if (inputs.length > 0) {
+                    let precedingInputs = inputs.filter(inp => 
+                        inp.compareDocumentPosition(span) & Node.DOCUMENT_POSITION_FOLLOWING
+                    );
+                    if (precedingInputs.length > 0) {
+                        return precedingInputs[precedingInputs.length - 1];
+                    }
+                    return inputs[0];
+                }
+            }
+            return null;
+        }
+
         function extractDataFromHTML(htmlString) {
             const parser = new DOMParser();
             const doc = parser.parseFromString(htmlString, 'text/html');
@@ -97,71 +120,94 @@
             let seenVars = new Set(); 
 
             const questions = doc.querySelectorAll('.ISAS5');
+            const treeLinks = Array.from(doc.querySelectorAll('#syncTreeview a'));
             
             questions.forEach(qBlock => {
                 const qId = qBlock.id;
                 
-                // E로 시작하는 단순 설명/안내 박스(E1, E2 등)는 스킵
+                // E로 시작하는 안내 박스는 스킵
                 if (/^E\d+/i.test(qId)) return;
 
-                const treeLink = doc.querySelector(`#syncTreeview a[href*="#${qId}"]`);
+                // Hash(#qId)가 완전 일치하는 Treeview 링크 탐색 (중복 오매칭 방지)
+                const treeLink = treeLinks.find(a => {
+                    let href = a.getAttribute('href') || '';
+                    return href.endsWith('#' + qId);
+                });
                 if (!treeLink) return;
 
-                // 1. 큰 질문(Main Label) 추출
+                // 1. 큰 질문(Main Label) 및 Prefix 추출
                 let clone = treeLink.cloneNode(true);
                 clone.querySelectorAll('span').forEach(span => span.remove());
                 let mainLabel = clone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
 
-                let prefixMatch = mainLabel.match(/^([A-Za-z]+[0-9]+(?:-[0-9]+)?)\./);
+                let prefixMatch = mainLabel.match(/^([A-Za-z]+[0-9]+(?:-[0-9]+)?)\.?/);
                 let targetPrefix = prefixMatch ? prefixMatch[1].replace(/-/g, '_') : null;
 
                 const varSpans = qBlock.querySelectorAll('.variableinformation2');
                 if (varSpans.length === 0) return;
 
                 let varsInBlock = [];
-                let blockVarsMap = new Map();
 
-                // 2. 블록 내 모든 변수 속성 파악
+                // 2. 블록 내 모든 변수 요소 추출
                 varSpans.forEach(span => {
                     let rawVar = span.innerText.replace(/\[|\]/g, '').trim(); 
                     
-                    let inputEl = span.closest('label')?.querySelector('input') || span.previousElementSibling;
-                    if(!inputEl || inputEl.tagName !== 'INPUT') {
-                        inputEl = span.parentElement.querySelector('input');
-                    }
+                    let inputEl = findInputForSpan(span);
                     let casetype = inputEl ? inputEl.getAttribute('casetype') : '';
 
-                    // 변수명 정제 (Q26SA -> Q26)
                     let qMatch = rawVar.match(/^(Q\d+)/i);
                     let baseQ = qMatch ? qMatch[1].toUpperCase() : rawVar.replace(/(MA|SA|TN|TL|TS|RK).*$/i, '');
 
-                    // 뒤에 붙은 값 추출 (예: Q8MA:6 -> 6, Q8TS6 -> 6)
-                    let typeMatch = rawVar.match(/(MA|SA|TN|TL|TS|RK)[:_]?(\d+)?/i);
-                    let vType = typeMatch ? typeMatch[1].toUpperCase() : (casetype ? casetype.toUpperCase() : 'SA');
-                    let vVal = typeMatch && typeMatch[2] ? typeMatch[2] : "";
+                    let valMatch = rawVar.match(/[:_]?(\d+)$/);
+                    let vVal = valMatch ? valMatch[1] : "";
 
-                    let itemObj = {
+                    let typeMatch = rawVar.match(/(MA|SA|TN|TL|TS|RK)/i);
+                    let vType = typeMatch ? typeMatch[1].toUpperCase() : (casetype ? casetype.toUpperCase() : 'SA');
+
+                    varsInBlock.push({
                         rawVar, baseQ, vType, vVal, span, input: inputEl,
                         cell: span.closest('td, th'),
                         row: span.closest('tr')
-                    };
-
-                    varsInBlock.push(itemObj);
-
-                    if (!blockVarsMap.has(baseQ)) {
-                        blockVarsMap.set(baseQ, { hasSA: false, hasMA: false, hasRK: false });
-                    }
-                    let bData = blockVarsMap.get(baseQ);
-                    if (vType === 'SA') bData.hasSA = true;
-                    if (vType === 'MA') bData.hasMA = true;
-                    if (vType === 'RK') bData.hasRK = true;
+                    });
                 });
 
-                // 표 형태의 SA(Grid SA) 문항인지 판별 (같은 문항 블록 안에 여러 개의 SA 베이스Q가 존재)
                 let saBases = Array.from(new Set(varsInBlock.filter(v => v.vType === 'SA').map(v => v.baseQ)));
                 let isGridSA = saBases.length > 1;
 
-                // 3. 테이블 행/열 제목 파악
+                // 3. 변수 속성 판별 (기타 오픈 TS / MA / SA 구분)
+                varsInBlock.forEach(item => {
+                    let isTextType = ['TS', 'TL', 'TN'].includes(item.vType);
+                    let sameBaseVars = varsInBlock.filter(v => v.baseQ === item.baseQ);
+                    let hasChoiceInBase = sameBaseVars.some(v => ['SA', 'MA', 'RK'].includes(v.vType));
+                    let hasMA = sameBaseVars.some(v => v.vType === 'MA');
+                    let hasSA = sameBaseVars.some(v => v.vType === 'SA');
+                    let hasRK = sameBaseVars.some(v => v.vType === 'RK');
+
+                    item.hasChoiceInBase = hasChoiceInBase;
+
+                    if (isTextType && hasChoiceInBase) {
+                        if (hasMA) {
+                            // MA 기타 텍스트 (예: Q8_6A)
+                            item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}A` : `${item.baseQ}A`;
+                            item.isMAOther = true;
+                        } else if (hasSA || hasRK) {
+                            // SA 기타 텍스트 (예: Q9_5 또는 Q15_5)
+                            item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}` : `${item.baseQ}_OTHER`;
+                            item.isSAOther = true;
+                        }
+                    } else if (item.vType === 'SA') {
+                        item.spssVarName = item.baseQ; // SA는 Q15
+                    } else {
+                        let isSinglePureText = isTextType && !hasChoiceInBase && sameBaseVars.length === 1;
+                        if (isSinglePureText) {
+                            item.spssVarName = item.baseQ; // 단독 1개 주관식 (DQ1 -> Q4)
+                        } else {
+                            item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}` : item.baseQ;
+                        }
+                    }
+                });
+
+                // 4. 테이블 행/열 제목 파악
                 let tables = qBlock.querySelectorAll('table[tabletype="CASE"]');
                 let tableHeaders = new Map();
 
@@ -172,7 +218,7 @@
                         let firstRowCells = rows[0].querySelectorAll('td, th');
                         firstRowCells.forEach(cell => {
                             let cClone = cell.cloneNode(true);
-                            cClone.querySelectorAll('label, input, span.variableinformation, span.variableinformation2').forEach(e => e.remove());
+                            cClone.querySelectorAll('label, input, textarea, span.variableinformation, span.variableinformation2').forEach(e => e.remove());
                             colHeaders.push(cClone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""'));
                         });
                     }
@@ -182,7 +228,7 @@
                         let rHead = "";
                         if (cells.length > 0) {
                             let cClone = cells[0].cloneNode(true);
-                            cClone.querySelectorAll('label, input, span.variableinformation, span.variableinformation2').forEach(e => e.remove());
+                            cClone.querySelectorAll('label, input, textarea, span.variableinformation, span.variableinformation2').forEach(e => e.remove());
                             rHead = cClone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
                         }
                         rowHeaders.push(rHead);
@@ -190,44 +236,26 @@
                     tableHeaders.set(table, { cols: colHeaders, rows: rowHeaders });
                 });
 
-                // 4. SPSS 변수명 결정 및 Syntax 생성
-                varsInBlock.forEach(item => {
-                    let bData = blockVarsMap.get(item.baseQ);
-                    let isTextType = ['TS', 'TL', 'TN'].includes(item.vType);
-                    
-                    // 변수명(spssVarName) 결정 로직
-                    if (isTextType) {
-                        if (bData.hasMA) {
-                            // MA에 딸린 기타 오픈 텍스트 (예: Q8_6A)
-                            item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}A` : `${item.baseQ}A`;
-                        } else if (bData.hasSA || bData.hasRK) {
-                            // SA/RK에 딸린 기타 오픈 텍스트 (예: Q15_5)
-                            item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}` : item.baseQ;
-                        } else {
-                            // 단독 주관식 (예: Q14_1)
-                            item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}` : item.baseQ;
-                        }
-                    } else if (item.vType === 'SA') {
-                        item.spssVarName = item.baseQ; // 기본 SA는 Q15 
-                    } else { // MA, RK
-                        item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}` : item.baseQ;
-                    }
+                // 5. Syntax 라벨 및 리네임 매핑 생성
+                let seenInBlock = new Set();
 
+                varsInBlock.forEach(item => {
                     let finalVarName = item.spssVarName;
-                    if (seenVars.has(finalVarName)) return; // 중복 방지
+
+                    if (seenInBlock.has(finalVarName)) return;
+                    seenInBlock.add(finalVarName);
+
+                    if (seenVars.has(finalVarName)) return;
                     seenVars.add(finalVarName);
 
                     let finalLabel = mainLabel;
-                    let renameTarget = targetPrefix;
+                    let renameTarget = null;
                     let varsForThisBase = varsInBlock.filter(v => v.baseQ === item.baseQ);
 
-                    // --- [라벨(Label) 및 리네임(Rename) 결정] ---
-                    
-                    // (A) SA 단일선택 (그리드 포함)
                     if (item.vType === 'SA') {
                         if (isGridSA) {
                             let gridIdx = saBases.indexOf(item.baseQ) + 1;
-                            let subLabel = getSubLabel(item, true, varsForThisBase, tableHeaders, bData);
+                            let subLabel = getSubLabel(item, true, varsForThisBase, tableHeaders);
                             finalLabel = subLabel ? `${mainLabel}_${gridIdx}) ${subLabel}` : `${mainLabel}_${gridIdx})`;
                             renameTarget = targetPrefix ? `${targetPrefix}_${gridIdx}` : null;
                         } else {
@@ -235,34 +263,38 @@
                             renameTarget = targetPrefix;
                         }
                     } 
-                    // (B) MA 다중선택
                     else if (item.vType === 'MA') {
-                        let subLabel = getSubLabel(item, false, [], tableHeaders, bData);
+                        let subLabel = getSubLabel(item, false, [], tableHeaders);
                         finalLabel = subLabel ? `${mainLabel}_${item.vVal}) ${subLabel}` : `${mainLabel}_${item.vVal})`;
                         renameTarget = targetPrefix ? (item.vVal ? `${targetPrefix}_${item.vVal}` : targetPrefix) : null;
                     } 
-                    // (C) RK 순위형 (1순위, 2순위)
                     else if (item.vType === 'RK') {
-                        let subLabel = getSubLabel(item, false, [], tableHeaders, bData);
+                        let subLabel = getSubLabel(item, false, [], tableHeaders);
                         finalLabel = subLabel ? `${mainLabel}_${item.vVal}순위) ${subLabel}` : `${mainLabel}_${item.vVal}순위)`;
                         renameTarget = targetPrefix ? (item.vVal ? `${targetPrefix}_${item.vVal}` : targetPrefix) : null;
                     } 
-                    // (D) TS, TL, TN 문항
-                    else if (isTextType) {
-                        let subLabel = getSubLabel(item, false, [], tableHeaders, bData);
-                        
-                        if (bData.hasMA) {
-                            // MA 기타 텍스트 (Q8_6A)
+                    else if (['TS', 'TL', 'TN'].includes(item.vType)) {
+                        if (item.isMAOther) {
+                            // MA 기타 텍스트 (예: Q8_6A)
+                            let subLabel = getSubLabel(item, false, [], tableHeaders);
                             finalLabel = subLabel ? `${mainLabel}_${item.vVal}) ${subLabel}` : `${mainLabel}_${item.vVal})`;
-                            renameTarget = targetPrefix ? (item.vVal ? `${targetPrefix}_${item.vVal}A` : `${targetPrefix}A`) : null;
-                        } else if (bData.hasSA || bData.hasRK) {
-                            // SA 기타 텍스트 (Q15_5)
-                            finalLabel = subLabel ? `${mainLabel}_${item.vVal}) ${subLabel}` : `${mainLabel}_${item.vVal})`;
-                            renameTarget = targetPrefix ? (item.vVal ? `${targetPrefix}_${item.vVal}` : targetPrefix) : null;
+                            renameTarget = targetPrefix ? `${targetPrefix}_${item.vVal}A` : null;
+                        } else if (item.isSAOther) {
+                            // SA 기타 텍스트 (예: Q9_5) -> 질문 라벨과 100% 동일하게
+                            finalLabel = mainLabel; 
+                            renameTarget = targetPrefix ? `${targetPrefix}_${item.vVal}` : null;
                         } else {
-                            // 단독 주관식 (Q14_1 등 평일 하루 평균 : 시간)
-                            finalLabel = subLabel ? `${mainLabel}_${subLabel}` : mainLabel;
-                            renameTarget = targetPrefix ? (item.vVal ? `${targetPrefix}_${item.vVal}` : targetPrefix) : null;
+                            // 단독 주관식/숫자형 (예: Q14_1, Q14_2 또는 DQ1)
+                            let isSinglePureText = varsForThisBase.length === 1;
+                            let subLabel = getSubLabel(item, false, [], tableHeaders);
+                            
+                            if (isSinglePureText) {
+                                finalLabel = mainLabel;
+                                renameTarget = targetPrefix;
+                            } else {
+                                finalLabel = subLabel ? `${mainLabel}_${subLabel}` : mainLabel;
+                                renameTarget = targetPrefix ? (item.vVal ? `${targetPrefix}_${item.vVal}` : targetPrefix) : null;
+                            }
                         }
                     }
 
@@ -290,33 +322,31 @@
             }
         }
 
-        // 보조 라벨(표의 행/열 제목, 입력칸 주변 텍스트 등)을 찾아주는 함수
-        function getSubLabel(item, isGridSA, allInputsForVar, tableHeaders, bData) {
-            let cell = item.cell;
-
-            // 1. 단독 주관식/숫자형(TN, TS)인 경우 <td>나 <p> 안의 텍스트 결합 (기타 텍스트가 아닐 때만)
-            if (['TN', 'TS', 'TL'].includes(item.vType) && !bData.hasSA && !bData.hasMA && !bData.hasRK) {
+        function getSubLabel(item, isGridSA, allInputsForVar, tableHeaders) {
+            // 1. 단독 주관식/숫자형(TN, TS) 입력창 앞뒤 텍스트 결합
+            if (['TN', 'TS', 'TL'].includes(item.vType) && !item.hasChoiceInBase) {
                 let container = item.span.closest('td, th, p, div, li');
                 if (container) {
                     let cClone = container.cloneNode(true);
-                    cClone.querySelectorAll('input, span.variableinformation, span.variableinformation2, img, script, br').forEach(e => e.remove());
+                    cClone.querySelectorAll('input, textarea, span.variableinformation, span.variableinformation2, img, script, br').forEach(e => e.remove());
                     let text = cClone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
-                    if (text && text !== item.val) return text;
+                    if (text && text !== item.vVal) return text;
                 }
             }
 
+            let cell = item.cell;
             if (!cell) return "";
 
-            // 2. 일반 보기(Label) 텍스트 확인 (기타 텍스트도 원래 보기 라벨을 복사함)
+            // 2. 일반 보기(Label) 텍스트 추출
             let labelEl = cell.querySelector('label');
             if (labelEl) {
                 let lClone = labelEl.cloneNode(true);
-                lClone.querySelectorAll('input, span.variableinformation, span.variableinformation2').forEach(e => e.remove());
+                lClone.querySelectorAll('input, textarea, span.variableinformation, span.variableinformation2').forEach(e => e.remove());
                 let text = lClone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
                 if (text) return text;
             }
 
-            // 3. 표(Grid) 형태일 경우 행/열 제목 참조
+            // 3. 표(Grid) 행/열 헤더 추출
             let table = cell.closest('table');
             let headers = tableHeaders.get(table);
             if (!headers) return "";
