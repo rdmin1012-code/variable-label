@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
     <meta charset="UTF-8">
-    <title>SPSS 라벨 자동 생성</title>
+    <title>SPSS 라벨 자동 생성기</title>
     <style>
         body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background: #f4f7f6; padding: 20px; color: #333; }
         .container { max-width: 1000px; margin: 0 auto; background: white; padding: 40px 30px; border-radius: 8px; box-shadow: 0 4px 10px rgba(0,0,0,0.1); }
@@ -32,7 +32,7 @@
 </head>
 <body>
     <div class="container">
-        <h1>SPSS 라벨 자동 생성</h1>
+        <h1>SPSS 라벨 자동 생성기</h1>
         
         <div class="upload-box">
             <label class="file-label" for="htmlFile">📂 HTML 파일 업로드</label>
@@ -123,7 +123,6 @@
                 const qId = qBlock.id;
                 if (/^E\d+/i.test(qId)) return;
 
-                // Hash(#qId) 완전 일치 매칭 (Q3 vs Q33 오매칭 완벽 방지)
                 const treeLink = treeLinks.find(a => {
                     let href = a.getAttribute('href') || '';
                     let hashPart = href.split('#')[1];
@@ -180,21 +179,22 @@
 
                     if (isTextType && hasChoiceInBase) {
                         if (hasMA) {
+                            // MA 기타 텍스트 (Q8_6A)
                             item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}A` : `${item.baseQ}A`;
                             item.isMAOther = true;
                         } else if (hasSA || hasRK) {
+                            // SA 기타 텍스트 (Q9_5)
                             item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}` : `${item.baseQ}_OTHER`;
                             item.isSAOther = true;
                         }
                     } else if (item.vType === 'SA') {
                         item.spssVarName = item.baseQ;
+                    } else if (isTextType && !hasChoiceInBase) {
+                        // 🔥 Pure TS/TN/TL (SA/MA 없이 TS만 있는 경우 -> Q34TS1 -> Q34_1)
+                        item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}` : item.baseQ;
+                        item.isPureText = true;
                     } else {
-                        let isSinglePureText = isTextType && !hasChoiceInBase && sameBaseVars.length === 1;
-                        if (isSinglePureText) {
-                            item.spssVarName = item.baseQ;
-                        } else {
-                            item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}` : item.baseQ;
-                        }
+                        item.spssVarName = item.vVal ? `${item.baseQ}_${item.vVal}` : item.baseQ;
                     }
                 });
 
@@ -271,16 +271,15 @@
                             finalLabel = mainLabel; 
                             renameTarget = targetPrefix ? `${targetPrefix}_${item.vVal}` : null;
                         } else {
-                            let isSinglePureText = varsForThisBase.length === 1;
+                            // Pure TS/TN/TL (Q34_1, Q34_2, Q4_1)
                             let subLabel = getSubLabel(item, false, [], tableHeaders);
                             
-                            if (isSinglePureText) {
-                                finalLabel = mainLabel;
-                                renameTarget = targetPrefix;
+                            if (subLabel) {
+                                finalLabel = `${mainLabel}_${subLabel}`;
                             } else {
-                                finalLabel = subLabel ? `${mainLabel}_${subLabel}` : mainLabel;
-                                renameTarget = targetPrefix ? (item.vVal ? `${targetPrefix}_${item.vVal}` : targetPrefix) : null;
+                                finalLabel = (varsForThisBase.length > 1 && item.vVal) ? `${mainLabel}_${item.vVal})` : mainLabel;
                             }
+                            renameTarget = targetPrefix ? (item.vVal ? `${targetPrefix}_${item.vVal}` : targetPrefix) : null;
                         }
                     }
 
@@ -309,19 +308,34 @@
         }
 
         function getSubLabel(item, isGridSA, allInputsForVar, tableHeaders) {
+            let row = item.row;
+
+            // 1. 행(tr) 안에 th가 존재하는 테이블형 주관식(Q0 정보 입력 등)인 경우 th 텍스트 최우선 활용
+            if (row) {
+                let th = row.querySelector('th');
+                if (th) {
+                    let tClone = th.cloneNode(true);
+                    tClone.querySelectorAll('span.variableinformation, span.variableinformation2, script, style').forEach(e => e.remove());
+                    let text = tClone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
+                    if (text) return text;
+                }
+            }
+
+            // 2. 단독 주관식/숫자형(TN, TS)의 경우 입력창 앞뒤 텍스트 결합 (단, 하이픈 등 기호만 있는 텍스트는 제외)
             if (['TN', 'TS', 'TL'].includes(item.vType) && !item.hasChoiceInBase) {
                 let container = item.span.closest('td, th, p, div, li');
                 if (container) {
                     let cClone = container.cloneNode(true);
                     cClone.querySelectorAll('input, textarea, span.variableinformation, span.variableinformation2, img, script, br').forEach(e => e.remove());
                     let text = cClone.innerText.trim().replace(/\s+/g, ' ').replace(/"/g, '""');
-                    if (text && text !== item.vVal) return text;
+                    if (text && !/^[\s\-_:=;.,]+$/.test(text) && text !== item.vVal) return text;
                 }
             }
 
             let cell = item.cell;
             if (!cell) return "";
 
+            // 3. 일반 보기(Label) 텍스트 추출
             let labelEl = cell.querySelector('label');
             if (labelEl) {
                 let lClone = labelEl.cloneNode(true);
@@ -330,11 +344,11 @@
                 if (text) return text;
             }
 
+            // 4. 표(Grid) 행/열 헤더 추출
             let table = cell.closest('table');
             let headers = tableHeaders.get(table);
             if (!headers) return "";
 
-            let row = item.row;
             let rIdx = Array.from(table.querySelectorAll('tr')).indexOf(row);
             let cellsArray = Array.from(row.querySelectorAll('td, th'));
             let cIdx = cellsArray.indexOf(cell);
